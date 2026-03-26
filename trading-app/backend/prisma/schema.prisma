@@ -1,0 +1,63 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  name      String?
+  createdAt DateTime @default(now())
+  alerts    Alert[]
+}
+
+model Stock {
+  id          Int      @id @default(autoincrement())
+  symbol      String   @unique
+  name        String
+  lastPrice   Float?
+  change      Float?
+  changePercent Float?
+  volume      Float?
+  updatedAt   DateTime @default(now())
+  analyses    Analysis[]
+  alerts      Alert[]
+}
+
+model Analysis {
+  id          Int      @id @default(autoincrement())
+  stockId     Int
+  stock       Stock    @relation(fields: [stockId], references: [id])
+  symbol      String
+  signal      String
+  score       Int
+  data        String   // JSON stringified full analysis
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+}
+
+model Alert {
+  id          Int      @id @default(autoincrement())
+  userId      Int
+  user        User     @relation(fields: [userId], references: [id])
+  stockId     Int
+  stock       Stock    @relation(fields: [stockId], references: [id])
+  symbol      String
+  condition   String   // "ACHAT", "VENTE", "NEUTRE"
+  triggered   Boolean  @default(false)
+  triggeredAt DateTime?
+  createdAt   DateTime @default(now())
+}
+
+model Cache {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String   // JSON stringified
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
