@@ -1,0 +1,30 @@
+{
+  "name": "trading-signals-backend",
+  "version": "1.0.0",
+  "description": "Trading signals API for Casablanca Stock Exchange",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:seed": "node prisma/seed.js"
+  },
+  "keywords": ["trading", "signals", "casablanca"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@prisma/client": "^5.8.0",
+    "axios": "^1.6.2",
+    "cheerio": "^1.0.0-rc.12",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.1.2",
+    "node-cron": "^3.0.2",
+    "sentiment": "^6.2.1",
+    "technicalindicators": "^3.1.0"
+  },
+  "devDependencies": {
+    "prisma": "^5.8.0"
+  }
+}

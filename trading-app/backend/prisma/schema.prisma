@@ -1,0 +1,96 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  email     String    @unique
+  password  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  alerts    Alert[]
+}
+
+model Stock {
+  id         Int       @id @default(autoincrement())
+  symbol     String    @unique
+  name       String
+  sector     String?
+  candles    Candle[]
+  signals    Signal[]
+  fundamentals Fundamental?
+  updatedAt  DateTime  @updatedAt
+}
+
+model Candle {
+  id        Int      @id @default(autoincrement())
+  stockId   Int
+  stock     Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  date      DateTime @unique(map: "stock_date")
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Float
+  @@unique([stockId, date])
+}
+
+model Signal {
+  id               Int      @id @default(autoincrement())
+  stockId          Int
+  stock            Stock    @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  score            Int
+  signal           String   // ACHAT | VENTE | NEUTRE
+  confidence       String   // Forte | Moyenne | Faible
+  technicalScore   Int
+  fundamentalScore Int
+  newsScore        Int
+  rsiSignal        String?
+  macdSignal       String?
+  mmSignal         String?
+  stochSignal      String?
+  vwapSignal       String?
+  createdAt        DateTime @default(now())
+}
+
+model Fundamental {
+  id             Int     @id @default(autoincrement())
+  stockId        Int     @unique
+  stock          Stock   @relation(fields: [stockId], references: [id], onDelete: Cascade)
+  per            Float   // Price Earnings Ratio
+  pbRatio        Float   // Price to Book
+  dividende      Float   // Dividend yield
+  croissanceCA   Float   // Revenue growth %
+  margeNette     Float   // Net margin %
+  updatedAt      DateTime @updatedAt
+}
+
+model NewsArticle {
+  id        Int     @id @default(autoincrement())
+  symbol    String
+  titre     String
+  source    String
+  url       String
+  impact    String  // Positif | Négatif | Neutre
+  score     Int
+  date      DateTime
+  createdAt DateTime @default(now())
+}
+
+model Alert {
+  id        Int     @id @default(autoincrement())
+  userId    Int
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  symbol    String
+  condition String  // "signal == ACHAT" | "score > 70" etc.
+  active    Boolean @default(true)
+  createdAt DateTime @default(now())
+}
