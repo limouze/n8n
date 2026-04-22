@@ -1,0 +1,350 @@
+{
+  "name": "TikTok Pipeline - Étape 1 Ingestion YouTube",
+  "nodes": [
+    {
+      "id": "node-001-webhook",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "parameters": {
+        "path": "youtube-ingest",
+        "responseMode": "responseNode",
+        "httpMethod": "POST",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-002-pg-check",
+      "name": "Postgres: Vérif Idempotence",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*)::int AS count FROM podcasts_sources WHERE youtube_url = '{{ $json.youtube_url }}'",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REMPLACER_PAR_ID_CREDENTIAL",
+          "name": "Postgres Pipeline TikTok"
+        }
+      }
+    },
+    {
+      "id": "node-003-if",
+      "name": "IF: Déjà Traité",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [720, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cond-001",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "node-004-respond-done",
+      "name": "Respond: Déjà Traité",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [960, 160],
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 200,
+        "responseBody": "={{ JSON.stringify({ status: 'already_processed', message: 'URL déjà traitée, aucune action effectuée.', youtube_url: $('Webhook Trigger').item.json.youtube_url }) }}"
+      }
+    },
+    {
+      "id": "node-005-extract-id",
+      "name": "Code JS: Extraire ID YouTube",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 440],
+      "parameters": {
+        "jsCode": "// -------------------------------------------------------\n// Ce node extrait l'ID YouTube depuis l'URL.\n// Exemple : https://www.youtube.com/watch?v=dQw4w9WgXcQ\n//           → short_id = \"dQw4w9WgXcQ\"\n// L'ID sera utilisé comme identifiant unique dans tout le pipeline.\n// -------------------------------------------------------\n\n// Récupérer l'URL depuis le webhook\nconst youtubeUrl = $('Webhook Trigger').item.json.youtube_url;\n\n// Regex pour extraire l'ID depuis les formats d'URL courants :\n// - youtube.com/watch?v=ID\n// - youtu.be/ID\n// - youtube.com/shorts/ID\nconst regex = /(?:youtube\\.com\\/(?:watch\\?v=|shorts\\/)|youtu\\.be\\/)([a-zA-Z0-9_-]{11})/;\nconst match = youtubeUrl.match(regex);\n\n// Si l'URL n'est pas reconnue, on stoppe avec une erreur claire\nif (!match) {\n  throw new Error(`URL YouTube invalide : ${youtubeUrl}`);\n}\n\nconst shortId = match[1]; // L'ID fait toujours 11 caractères\n\nconsole.log(`[EXTRACT_ID] URL : ${youtubeUrl} → ID : ${shortId}`);\n\n// Renvoyer les données enrichies au node suivant\nreturn [{ json: { youtube_url: youtubeUrl, short_id: shortId } }];"
+      }
+    },
+    {
+      "id": "node-006-http-download",
+      "name": "HTTP: Download + Audio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 440],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FASTAPI_WORKER_URL }}/api/download",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ youtube_url: $json.youtube_url, short_id: $json.short_id }) }}",
+        "options": {
+          "timeout": 600000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "node-007-http-transcribe",
+      "name": "HTTP: Transcription Whisper",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1440, 440],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FASTAPI_WORKER_URL }}/api/transcribe",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ audio_path: $json.audio_path, short_id: $json.short_id }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      }
+    },
+    {
+      "id": "node-008-merge",
+      "name": "Code JS: Fusion Données",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 440],
+      "parameters": {
+        "jsCode": "// -------------------------------------------------------\n// Ce node fusionne les données des étapes précédentes\n// en un seul objet JSON pour l'upload R2.\n// Il accède aux sorties des nodes précédents par leur nom.\n// -------------------------------------------------------\n\n// Données du téléchargement (node HTTP: Download + Audio)\nconst dl = $('HTTP: Download + Audio').item.json;\n\n// Données de la transcription (node HTTP: Transcription Whisper)\nconst tr = $('HTTP: Transcription Whisper').item.json;\n\n// URL d'origine (node webhook)\nconst youtubeUrl = $('Webhook Trigger').item.json.youtube_url;\n\nconsole.log(`[MERGE] Fusion pour short_id=${dl.short_id} : titre='${dl.title}'`);\n\n// Construire l'objet fusionné pour l'upload R2\nreturn [{\n  json: {\n    short_id:        dl.short_id,\n    youtube_url:     youtubeUrl,\n    title:           dl.title,\n    duration_s:      dl.duration_s,\n    video_path:      dl.video_path,\n    audio_path:      dl.audio_path,\n    transcript_path: tr.transcript_path,\n    word_count:      tr.word_count,\n  }\n}];"
+      }
+    },
+    {
+      "id": "node-009-http-upload",
+      "name": "HTTP: Upload R2",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1920, 440],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.FASTAPI_WORKER_URL }}/api/upload-r2",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ short_id: $json.short_id, youtube_url: $json.youtube_url, video_path: $json.video_path, audio_path: $json.audio_path, transcript_path: $json.transcript_path }) }}",
+        "options": {
+          "timeout": 300000
+        }
+      }
+    },
+    {
+      "id": "node-010-merge-final",
+      "name": "Code JS: Prépare Insert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2160, 440],
+      "parameters": {
+        "jsCode": "// -------------------------------------------------------\n// Prépare toutes les données pour l'INSERT Postgres.\n// On récupère les infos de chaque étape précédente.\n// -------------------------------------------------------\n\nconst dl  = $('HTTP: Download + Audio').item.json;\nconst r2  = $('HTTP: Upload R2').item.json;\n\nconsole.log(`[PREPARE_INSERT] short_id=${dl.short_id}, r2_video=${r2.r2_video_url}`);\n\nreturn [{\n  json: {\n    youtube_url:         dl.youtube_url,\n    title:               dl.title,\n    duration_s:          dl.duration_s,\n    r2_video_path:       r2.r2_video_key,\n    r2_transcript_path:  r2.r2_transcript_key,\n    short_id:            dl.short_id,\n    r2_video_url:        r2.r2_video_url,\n    r2_transcript_url:   r2.r2_transcript_url,\n  }\n}];"
+      }
+    },
+    {
+      "id": "node-011-pg-insert",
+      "name": "Postgres: Insert Source",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [2400, 440],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO podcasts_sources (youtube_url, title, duration_s, r2_video_path, r2_transcript_path, status) VALUES ('{{ $json.youtube_url }}', '{{ $json.title.replace(/'/g, \"''\") }}', {{ $json.duration_s }}, '{{ $json.r2_video_path }}', '{{ $json.r2_transcript_path }}', 'transcribed') ON CONFLICT (youtube_url) DO UPDATE SET status = 'transcribed', updated_at = NOW() RETURNING id",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "REMPLACER_PAR_ID_CREDENTIAL",
+          "name": "Postgres Pipeline TikTok"
+        }
+      }
+    },
+    {
+      "id": "node-012-telegram",
+      "name": "HTTP: Telegram Notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [2640, 440],
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $env.TELEGRAM_BOT_TOKEN }}/sendMessage",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ chat_id: $env.TELEGRAM_CHAT_ID, text: '✅ Transcription OK : ' + $('HTTP: Download + Audio').item.json.title + ' (' + Math.floor($(\\'HTTP: Download + Audio\\').item.json.duration_s / 60) + 'min)', parse_mode: 'HTML' }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "node-013-respond-ok",
+      "name": "Respond: Succès",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2880, 440],
+      "parameters": {
+        "respondWith": "json",
+        "responseCode": 200,
+        "responseBody": "={{ JSON.stringify({ status: 'success', short_id: $('HTTP: Download + Audio').item.json.short_id, title: $('HTTP: Download + Audio').item.json.title, duration_s: $('HTTP: Download + Audio').item.json.duration_s, r2_video_url: $('HTTP: Upload R2').item.json.r2_video_url, r2_transcript_url: $('HTTP: Upload R2').item.json.r2_transcript_url }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Vérif Idempotence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: Vérif Idempotence": {
+      "main": [
+        [
+          {
+            "node": "IF: Déjà Traité",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF: Déjà Traité": {
+      "main": [
+        [
+          {
+            "node": "Respond: Déjà Traité",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code JS: Extraire ID YouTube",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code JS: Extraire ID YouTube": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Download + Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Download + Audio": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Transcription Whisper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Transcription Whisper": {
+      "main": [
+        [
+          {
+            "node": "Code JS: Fusion Données",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code JS: Fusion Données": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Upload R2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Upload R2": {
+      "main": [
+        [
+          {
+            "node": "Code JS: Prépare Insert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code JS: Prépare Insert": {
+      "main": [
+        [
+          {
+            "node": "Postgres: Insert Source",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres: Insert Source": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Telegram Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Telegram Notify": {
+      "main": [
+        [
+          {
+            "node": "Respond: Succès",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "tags": ["tiktok-pipeline", "ingestion", "youtube"]
+}
